@@ -1,0 +1,451 @@
+---
+title: "MSDS 6306: Doing Data Science - Case Study 2"
+author: "David Grijalva"
+date: "11/18/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r message=FALSE, warning=FALSE}
+
+library(PerformanceAnalytics)
+library(MASS)
+library(tm) 
+library(tidyr)
+library(plyr)
+library(dplyr)
+library(tidyverse)
+library(caret)
+library(class)
+library(e1071)
+library(data.table)
+library(gganimate)
+library(GGally)
+require(ggthemes)
+library(rgr)  
+library(ggpubr)
+library(srvyr)
+library(mltools)
+library(data.table)
+library(ggcorrplot)
+
+```
+
+```{r warning=FALSE}
+data = read.csv("/Users/dgrijalva/SMU/Classes/Term Fall 2020/Doing-Data-Science/Units/project2/Data/CaseStudy2-data.csv")
+
+data =data %>% mutate(Attrition_binary = revalue(factor(data$Attrition),
+                                       c("Yes" = "1", "No" = "0")))
+
+```
+
+
+```{r warning=FALSE}
+
+data %>% ggplot(aes(x=Attrition, fill=Attrition)) + geom_bar(stat="count") + ggtitle("Attrition Yes vs No") + theme_clean()
+
+
+```
+
+
+There seems to be a heavy class imbalance. There seems to be a ~5:1 ratio, favoring to employees with no attrition. This might lead to problems creating an attrition prediction problem that generalizes well.   
+
+
+#Functions  
+We will start by creating functions to each feature appropriately and dynamically.  Three functions will be created:    
+1. This function will graph a histogram of the overall data, and data filtered by attrition yes and no.    
+2. This function will graph a bar chart of the percentage of people who left the company by feature type and value.    
+3. This function will graph a density plot of the attrition vs no attrition distribution per feature.     
+```{r warning=FALSE}
+
+feature_graphs = function (data, input_stat, feature) {
+
+  g1= data  %>% select(feature)  %>% gather() %>% ggplot(aes(value)) + geom_histogram(fill="steelblue", bins=10, stat=input_stat)  + ggtitle("Overall Data")  + theme_clean()+ 
+  theme(axis.text.x = element_text(angle = 60, hjust = 1, size = 6 )) + xlab(feature)
+
+
+  g2= data   %>% filter(Attrition=="Yes")  %>% select(feature)  %>% gather() %>% ggplot(aes(value, fill="steelblue")) + geom_histogram(fill="steelblue", bins=10, stat=input_stat)   + ggtitle("Attrition == Yes")  + theme_clean()+ 
+  theme(axis.text.x = element_text(angle = 60, hjust = 1, size = 6 )) + xlab(feature)
+
+  g3= data   %>% filter(Attrition=="No")  %>% select(feature)   %>% gather() %>% ggplot(aes(value, fill="steelblue")) + geom_histogram(fill="steelblue", bins=10, stat=input_stat)   + ggtitle("Attrition == No") + theme_clean()+ 
+  theme(axis.text.x = element_text(angle = 60, hjust = 1, size = 6 )) + xlab(feature)
+  
+  figure =  ggarrange(g1, g2, g3, ncol=3)
+  figure
+  
+}
+
+
+att_ptc = function (data, select_field){
+  df = data.frame(Field = c(), Attrition_ptc  = c())
+  for (i in unlist(unique(data[select_field]))) {
+    ratio  = nrow( data %>%  filter(Attrition == "Yes" & .[[select_field]] == i)) /nrow(data %>%filter(.[[select_field]]==i))
+    temp = data.frame(Field = i, Attrition_ptc=ratio)
+    df = rbind(df, temp)
+     
+  }
+  title = paste("Attrition Percentage By ", select_field)
+    figure = df %>% ggplot() + geom_bar(aes(y=Attrition_ptc, x=Field),fill="steelblue", stat="identity") + ylab("Attrition Percentage") + xlab(select_field) + ggtitle(paste0(title)) + theme_clean() + theme(axis.text.x = element_text(angle = 60, hjust = 1, size = 6 ))
+    print(figure)
+    
+  }
+
+
+density_plot = function(data, feature){
+  feature = as.name(feature)
+  title = paste("Dentisty Plot: ", feature)
+  figure = data%>% select(Attrition, feature) %>% ggplot(
+              aes(x = UQ(as.name(feature)), fill = Attrition)) + 
+              geom_density(alpha = 0.7) + 
+              scale_fill_manual(values = c("#386cb0","#fdb462")) + theme_clean() + ggtitle(paste0(title))
+  return (figure)
+  
+}
+
+
+
+```
+
+# Numerical Feature Distributions    
+Let's take a look at the numeric (int) feature distribution for the overall data, attrition yes and no.    
+This will give us a visual representation of the differences between attrition yes and no.  
+```{r message=FALSE, warning=FALSE}
+num_variables = c("Age", "DailyRate", "DistanceFromHome", "HourlyRate", "NumCompaniesWorked", "PercentSalaryHike", "YearsAtCompany", "YearsInCurrentRole", "YearsSinceLastPromotion", "YearsWithCurrManager","TotalWorkingYears", "TrainingTimesLastYear", "MonthlyIncome", "MonthlyRate", "PercentSalaryHike")
+
+
+for (i in num_variables) {
+  print(feature_graphs(data, "bin", i))
+  print(density_plot(data,i))
+  att_ptc(data, i)
+}
+
+``` 
+## Observations  
+- Many of the numerical features are right skewed.   
+- The age feature for employees with attrition seems to be heavy tailed towards right compared to employees who haven't left the company.  
+- Employees is their 20's are those with the higher attrition percentage.  
+- Lower monthly income seems to be more prominent among employees that left the company.   
+
+# Categorical  (nominal) Feature Distributions  
+Let's take a look at the categorical (fctr) feature distribution for the overall data, attrition yes and no.  
+This will give us a visual representation of the differences.  
+
+```{r warning=FALSE}
+cat_nominal_variables = c("BusinessTravel", "Department", "EducationField", "Gender", "JobRole", "MaritalStatus", "OverTime")
+
+for (i in cat_nominal_variables) {
+  print(feature_graphs(data, "count", i))
+  att_ptc(data, i)
+
+}
+
+
+``` 
+- There seems to be higher attrition on the following education fields: human resources and technical degrees.   
+- Attrition is more common among males.   
+- Attrition is more common among employees who worked overtime.   
+- Attrition is more common among single employees.   
+- Attrition is more common among employees who travel frequently.    
+
+
+# Categorical (ordinal) Feature Distributions  
+Let's take a look at the categorical (int) feature distribution for the overall data, attrition yes and no.  
+This will give us a visual representation of the differences.  
+
+```{r warning=FALSE}
+
+cat_nominal_features_overall = c("JobSatisfaction", "EnvironmentSatisfaction", "JobLevel", "WorkLifeBalance", "JobInvolvement", "PerformanceRating", "Education", "RelationshipSatisfaction", "StockOptionLevel") 
+
+
+for (i in cat_nominal_features_overall) {
+  print(feature_graphs(data, "count", i))
+  print(density_plot(data,i))
+  att_ptc(data, i)
+}
+
+``` 
+
+
+
+# What are the main factors leading to attrition?   
+From looking at the numerical and categorical (nominal and ordinal) we can conclude that the main factors leading to attrition are the following:  
+- Employees who travel frequently show a higher attrition rate compared to employees who travel rarely or don't travel at all.  
+- The job title with the higher attrition percentage is sales representative.  
+- Employees with a higher salary are less likely to result in leaving the company.  
+- According to the data, single employees are more likely to result in attrition.  
+- Employees how have previously worked in several companies show a higher percentage of attrition.  
+- Employees that work overtime are more likely to result on attrition.  
+- Employees in their 20's are more likely to leave the company.  
+
+
+# Trends  
+```{r message=FALSE, warning=FALSE}
+
+data_research = data %>% filter(JobRole == "Research Scientist")
+vars = c(cat_nominal_features_overall, num_variables, cat_nominal_features_overall)
+for (i in vars) {
+  print(feature_graphs(data_research, "count", i))
+  print(density_plot(data_research,i))
+  att_ptc(data_research, i)
+}
+
+```
+
+
+
+## Trends for Research Scientist  
+- Research Scientist's with performance rating higher than 3.5 are more likely to leave the company.   
+- Overall, Research Scientists  do not move between companies too much. 
+- Most Research Scientists have been at their role for less than 5 years.  
+- Most Research Scientists scientists are in their 30's.  
+- Research Scientists that are in their early 30's tend to have higher attrition.  
+
+
+```{r}
+nrow(data %>% filter(Attrition=="Yes")) / nrow(data)
+nrow(data)
+nrow(data %>% filter(Gender=="Male")) / nrow(data)
+data$yea
+```
+
+
+```{r fig.height=10, fig.width=10, warning=FALSE}
+
+
+
+
+c_data = data %>% select(num_variables, cat_nominal_features_overall)
+corr <- round(cor(c_data), 1)
+ggcorrplot(corr, hc.order = TRUE, type = "lower",lab = TRUE) + ggtitle("Correlation")
+
+
+```
+
+
+# Model Building  
+Now let's create two predictive models using the features provided in the dataset.   
+1. We will create a a KNN model to predict attrition  
+2. We will create a multiple-linear regression model to predict monthly income  
+
+The first thing we will do is encode the categorical values. This will allow us to use this features in a KNN models  
+
+```{r message=FALSE, warning=FALSE}
+# one hot encoding text variables
+nominal_categories = data %>% select(cat_nominal_variables)
+one_encode_data =  one_hot(as.data.table(nominal_categories))
+
+```
+
+
+Now, we need to create a train and test data set.  We will use a 70-30 percent split.   
+```{r message=FALSE, warning=FALSE}
+# build data set with all variables needed
+predict_data = data %>% select(num_variables, cat_nominal_features_overall)
+cl = data$Attrition_binary
+predict_data = cbind(predict_data, one_encode_data)
+predict_data = cbind(predict_data, cl)
+
+set.seed(20)
+splitPerc = .70
+
+# Split the dataset into train and test
+trainIndices = sample(1:dim(predict_data)[1],round(splitPerc * dim(predict_data)[1]))
+train = predict_data[trainIndices,]
+test = predict_data[-trainIndices,]
+```
+  
+  
+Now that we have a train and test set. We will proceed to preprocess the data. The only preprocessing we will perform is scaling the features. We have several features, each of different scales. This might hurt the predictive model performance.  For scaling, we will use the "scale" method using the train data only, this will prevent data leakage.    
+```{r  warning=FALSE}
+# Transform the data into the same scale
+pp = preProcess( train[,1:51], method = c("scale"))
+scaled_train = predict(pp, train[,1:51])
+scaled_test = predict(pp, test[,1:51])
+
+dim(scaled_train)
+dim(scaled_test)
+```
+```{R}
+cla_test = as.vector(test$cl)
+```
+# KNN - Predicting attrition  
+Now that both the train and test sets have been preprocess we will build the KNN model.  
+The first step will be to choose which is the K that provided the best sensitivity and specificity on the test data. We will iterate the model training using K's ranging from 1 to 50.  
+We will use the best K to build our final model.   
+For this model, we will have a success metric of achieving a minimum of 60% on both sensitivity and specificity.  
+```{r warning=FALSE}
+
+#library("crossval")
+#Choose the best K
+set.seed(123)
+
+# Run iterations to find the best K
+iterations = 50
+accs = data.frame(accuracy = numeric(iterations), k = numeric(iterations))
+
+for(i in 1:iterations)
+{
+  classification = knn(scaled_train, scaled_test,train$cl,k=i)
+  cm = confusionMatrix(table(classification,test$cl), positive="1")
+
+  
+  accs$accuracy[i] = cm$overall[1]
+  accs$k[i] = i
+  accs$sensitivity[i] = cm$byClass[1]
+  accs$specificity[i] = cm$byClass[2]
+}
+
+# Plot the K values with accuracy variation
+ggplot() + geom_line(aes(accs$k,accs$accuracy, color="blue")) + ggtitle("Best Value of K") +  xlab("Value of k") + ylab("Percentage") + geom_line(aes(accs$k,accs$sensitivity, color="red")) + geom_line(aes(accs$k,accs$specificity, color="orange")) + scale_color_discrete(name = "Y series", labels = c("Accuracy","Specificity","Sensisivity")) + theme_clean()
+classification = knn(scaled_train, scaled_test,train$cl,k=5)
+levels(test) = c("Attrition", "No Attrition")
+cm = confusionMatrix(table(classification, test$cl), positive="1", )
+
+cm
+cm$table
+```
+
+
+
+After running the model for 50 K iterations the best K was 5  Unfortunately this K provided a Sensitivity of 13% and a Specificity of 98%. The Sensitivity is well above our minimum requirement of 60% so reject this model and move into making a Logistic regression.   
+
+
+
+
+
+
+```{r}
+cm_logit = function(predictions, reference){
+  new_logit_conf_matrix <- table(reference, predictions > 0.2) 
+
+  (new_logit_conf_matrix[[1,1]] + new_logit_conf_matrix[[2,2]]) / sum(new_logit_conf_matrix)
+  classification <- ifelse(predictions > 0.2, 1, 0)
+
+# Construct a confusion matrix
+  new_logit_conf_matrix <- table(classification, reference)
+  confusionMatrix(new_logit_conf_matrix, positive="1")
+}
+  
+
+```
+
+
+
+# Logistic Regression
+```{r message=FALSE, warning=FALSE}
+
+scaled_train_log_r = cbind(scaled_train, train$cl)
+
+scaled_train_log_r <- scaled_train_log_r %>% rename(cl = "train$cl") 
+
+scaled_test_log_r = cbind(scaled_test, test$cl)
+scaled_test_log_r <- scaled_test_log_r %>% rename(cl = "test$cl") 
+
+log_r = glm.fit <- glm(train$cl ~ ., data = scaled_train_log_r, family = "binomial")
+summary(log_r)
+training_prediction <- predict(log_r, newdata = scaled_train_log_r, type = "response") 
+hist(training_prediction)
+cm_logit(training_prediction, scaled_train_log_r$cl)
+```
+
+ 
+
+```{r message=FALSE, warning=FALSE}
+testing_prediction <- predict(log_r, newdata = scaled_test_log_r, type = "response")
+hist(testing_prediction)
+cm_logit(testing_prediction, scaled_test_log_r$cl)
+```
+
+
+The logistic regression, with a threshold of 20% (for attrition and no attrition) give us a Sensitivity of 75% and a Specificity of 82% on the testing data.  These numbers are well above the 60%  minimum requirement.  
+
+# Validation data
+```{r warning=FALSE}
+#Export validation data
+
+val_data = read.csv("/Users/dgrijalva/SMU/Classes/Term Fall 2020/Doing-Data-Science/Units/project2/Data/CaseStudy2CompSet No Attrition.csv")
+
+
+nominal_categories_val = val_data %>% select(cat_nominal_variables)
+
+one_encode_data_val =  one_hot(as.data.table(nominal_categories_val))
+
+predict_data = val_data %>% select(ID, num_variables, cat_nominal_features_overall)
+
+
+predict_data = cbind(predict_data, one_encode_data_val)
+
+scaled_validation = predict(pp, predict_data[,2:52])
+val_prediction <- predict(log_r, newdata = scaled_validation, type = "response")
+hist(testing_prediction)
+pred = ifelse(val_prediction > 0.2, "Yes", "No")
+val_prediction_df = data.frame(ID=val_data$ID,Attrition=pred )
+write.csv(val_prediction_df, "../Data/Case2Predictions_Grijalva_Attrition.csv")
+```
+
+
+
+
+
+# Multiple linear regression -  Predicting monthly income  
+Now let's move on into building a model that can predict monthly income. For this we will use the original data set not the pre-process ones used for the KNN model. The reason for this is that in R, the LM function encodes the data automatically. So there is no need for us to provide any type of encoding.  For the multiple linear regression model we will also use the a forward and backward's stepwise in order to select the useful features.  For this model, the success metric is that we want a RMSE lower than 3,000.   
+
+
+```{r warning=FALSE}
+reg_data = data %>% select(num_variables, cat_nominal_features_overall)
+
+reg_data = cbind(reg_data, one_encode_data)
+lm_fit = lm(MonthlyIncome ~.,reg_data)
+step = stepAIC(lm_fit, direction = "both",trace=F)
+summary(step)
+
+```
+  
+  
+The model has a adjusted R squared  of 94% which means the 94% of the variability in monthly income is explained by the relationship between monthly income and the explanatory variables.   
+```{r warning=FALSE}
+step
+```
+
+
+In the model training phase, the model identify 20 features as the ones making a significant contribution to the monthly income prediction For many of this features there is an overlap with important features that also helped explain attrition.   
+
+```{r warning=FALSE}
+RSS = c(crossprod(lm_fit$residuals))
+MSE = RSS / length(lm_fit$residuals)
+RMSE = sqrt(MSE)
+RMSE
+```
+
+
+The linear regression model has an RMSE way below the acceptable limit of 3,000. Because of this we will accept this version of the model.   
+
+# Validate
+```{r warning=FALSE}
+library("readxl")
+val_sal_data = read_excel("/Users/dgrijalva/SMU/Classes/Term Fall 2020/Doing-Data-Science/Units/project2/Data/CaseStudy2CompSet No Salary.xlsx")
+
+
+num_variables_sal_val = c("Age", "DailyRate", "DistanceFromHome", "HourlyRate", "NumCompaniesWorked", "PercentSalaryHike", "YearsAtCompany", "YearsInCurrentRole", "YearsSinceLastPromotion", "YearsWithCurrManager","TotalWorkingYears", "TrainingTimesLastYear", "MonthlyRate", "PercentSalaryHike")
+
+
+nominal_categories_val_reg = val_sal_data %>% select(cat_nominal_variables)
+nominal_categories_val_reg = as.data.frame(unclass(nominal_categories_val_reg))
+
+one_encode_data_val_reg =  one_hot(as.data.table(nominal_categories_val_reg))
+
+predict_data_reg_val = val_sal_data %>% select(ID, num_variables_sal_val, cat_nominal_features_overall)
+
+
+predict_data_reg_val = cbind(predict_data_reg_val, one_encode_data_val_reg)
+
+
+
+
+salary_pred = predict(step,predict_data_reg_val, type = "response")
+write.csv(salary_pred, "../Data/Case2Predictions_Grijalva_Salary.csv")
+```
+
